@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Stack Data Structure Visualization</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            pointer-events: none; /* Let clicks pass through to canvas where not on buttons */
+            z-index: 10;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        p {
+            margin: 5px 0 15px 0;
+            color: #ccc;
+            font-size: 0.9rem;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            z-index: 20;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 12px 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #btn-push {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            border: none;
+        }
+
+        #btn-pop {
+            background: linear-gradient(135deg, #FF5252, #D32F2F);
+            border: none;
+        }
+
+        #status-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255,255,255,0.8);
+            font-size: 2rem;
+            font-weight: bold;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+
+        #info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 10px;
+            color: #fff;
+            font-family: monospace;
+            border: 1px solid rgba(255,255,255,0.1);
+            max-width: 200px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .highlight {
+            color: #4CAF50;
+        }
+
+        /* Instructions overlay */
+        #instructions {
+            position: absolute;
+            bottom: 100px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.5);
+            font-size: 0.8rem;
+            pointer-events: none;
+        }
+
+    </style>
+    <!-- Load Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>Stack Visualizer (LIFO)</h1>
+        <p>Last In, First Out</p>
+    </div>
+
+    <div id="info-panel">
+        <div class="stat-row"><span>Size:</span> <span id="stack-size">0</span></div>
+        <div class="stat-row"><span>Top Value:</span> <span id="stack-top">None</span></div>
+        <div class="stat-row" style="margin-top:10px; border-top:1px solid #444; padding-top:5px;">
+            <span style="font-size:0.8em; color:#aaa;">Current Action:</span>
+        </div>
+        <div id="current-action" style="color:#ffeb3b; font-weight:bold;">Idle</div>
+    </div>
+
+    <div id="status-message">Stack Overflow!</div>
+
+    <div id="instructions">
+        Click and drag to rotate view &bull; Scroll to zoom
+    </div>
+
+    <div id="controls">
+        <button id="btn-push" onclick="pushStack()">PUSH</button>
+        <button id="btn-pop" onclick="popStack()">POP</button>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- Configuration ---
+        const BLOCK_WIDTH = 3;
+        const BLOCK_HEIGHT = 1;
+        const BLOCK_DEPTH = 3;
+        const MAX_STACK_SIZE = 10;
+        const ANIMATION_SPEED = 0.2; // Lower is slower, but we use simple lerp here
+        const HOVER_HEIGHT = 12; // Height from which blocks drop
+
+        // --- Global Variables ---
+        let scene, camera, renderer;
+        let stack = []; // Stores the mesh objects
+        let stackValues = []; // Stores the logical values
+        let blockCounter = 1;
+        let isAnimating = false;
+        
+        // Camera Controls variables
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let cameraAngle = { theta: Math.PI / 4, phi: Math.PI / 6 }; // Initial angles
+        let cameraRadius = 20;
+
+        // --- Initialization ---
+        function init() {
+            // 1. Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x202025);
+            scene.fog = new THREE.Fog(0x202025, 15, 50);
+
+            // 2. Camera Setup
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            updateCameraPosition();
+
+            // 3. Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 4. Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            scene.add(dirLight);
+
+            // Spot light for dramatic effect
+            const spotLight = new THREE.SpotLight(0x4CAF50, 0.5);
+            spotLight.position.set(-10, 10, -5);
+            spotLight.lookAt(0,0,0);
+            scene.add(spotLight);
+
+            // 5. Base Platform
+            createBase();
+
+            // 6. Event Listeners
+            window.addEventListener('resize', onWindowResize);
+            
+            // Mouse Interactions for Camera
+            const container = document.getElementById('canvas-container');
+            container.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+            
+            window.addEventListener('mouseup', () => isDragging = false);
+            
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+
+                const deltaMove = {
+                    x: e.clientX - previousMousePosition.x,
+                    y: e.clientY - previousMousePosition.y
+                };
+
+                // Rotate camera based on mouse movement
+                cameraAngle.theta -= deltaMove.x * 0.01;
+                cameraAngle.phi -= deltaMove.y * 0.01;
+
+                // Clamp vertical angle to prevent flipping
+                cameraAngle.phi = Math.max(0.1, Math.min(Math.PI / 2 - 0.1, cameraAngle.phi));
+
+                updateCameraPosition();
+
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+
+            // Wheel to zoom
+            container.addEventListener('wheel', (e) => {
+                cameraRadius += e.deltaY * 0.01;
+                cameraRadius = Math.max(10, Math.min(40, cameraRadius));
+                updateCameraPosition();
+            });
+
+            // Start Animation Loop
+            animate();
+        }
+
+        function updateCameraPosition() {
+            // Convert spherical coordinates to Cartesian
+            camera.position.x = cameraRadius * Math.sin(cameraAngle.theta) * Math.cos(cameraAngle.phi);
+            camera.position.y = cameraRadius * Math.sin(cameraAngle.phi);
+            camera.position.z = cameraRadius * Math.cos(cameraAngle.theta) * Math.cos(cameraAngle.phi);
+            camera.lookAt(0, 2, 0); // Look slightly above origin
+        }
+
+        function createBase() {
+            // The Pedestal
+            const geometry = new THREE.CylinderGeometry(4, 4.5, 1, 32);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                roughness: 0.5,
+                metalness: 0.5
+            });
+            const base = new THREE.Mesh(geometry, material);
+            base.position.y = -0.5;
+            base.receiveShadow = true;
+            scene.add(base);
+
+            // A grid helper for visual reference
+            const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
+            gridHelper.position.y = -1;
+            scene.add(gridHelper);
+        }
+
+        // --- Canvas Texture Generator for Numbers ---
+        function createTexturedMaterial(number, colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+
+            // Background color
+            ctx.fillStyle = colorHex;
+            ctx.fillRect(0, 0, 256, 256);
+
+            // Border
+            ctx.strokeStyle = "rgba(255,255,255,0.5)";
+            ctx.lineWidth = 20;
+            ctx.strokeRect(0,0,256,256);
+
+            // Text
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 120px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(number, 128, 128);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            return new THREE.MeshStandardMaterial({ map: texture });
+        }
+
+        // --- Core Logic ---
+
+        function pushStack() {
+            if (isAnimating) return;
+            if (stack.length >= MAX_STACK_SIZE) {
+                showStatus("Stack Overflow!", "red");
+                return;
+            }
+
+            isAnimating = true;
+            updateUI("Pushing " + blockCounter + "...");
+
+            // 1. Create Geometry
+            const geometry = new THREE.BoxGeometry(BLOCK_WIDTH, BLOCK_HEIGHT, BLOCK_DEPTH);
+            
+            // 2. Generate Color (Hue based on stack height for rainbow effect)
+            const hue = Math.random() * 360;
+            const color = `hsl(${hue}, 70%, 50%)`;
+            
+            // Convert HSL to Hex for canvas (helper needed or just simple hex approximation)
+            // For simplicity, let's pick a specific palette or random hex
+            const colors = ['#e57373', '#f06292', '#ba68c8', '#9575cd', '#7986cb', '#64b5f6', '#4fc3f7', '#4dd0e1', '#4db6ac', '#81c784'];
+            const bgHex = colors[stack.length % colors.length];
+
+            const material = createTexturedMaterial(blockCounter, bgHex);
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+
+            // 3. Initial Position (High up)
+            const targetY = stack.length * BLOCK_HEIGHT + (BLOCK_HEIGHT/2); // Sit on top of previous
+            mesh.position.set(0, HOVER_HEIGHT, 0);
+            
+            // 4. Store Animation Data
+            mesh.userData = {
+                targetY: targetY,
+                velocity: 0,
+                state: 'dropping' // 'dropping', 'settled', 'popping'
+            };
+
+            scene.add(mesh);
+            stack.push(mesh);
+            stackValues.push(blockCounter);
+            
+            blockCounter++;
+        }
+
+        function popStack() {
+            if (isAnimating) return;
+            if (stack.length === 0) {
+                showStatus("Stack Underflow!", "orange");
+                return;
+            }
+
+            isAnimating = true;
+            
+            const topMesh = stack[stack.length - 1];
+            const val = stackValues[stackValues.length - 1];
+            updateUI("Popping " + val + "...");
+
+            topMesh.userData.state = 'popping';
+            topMesh.userData.targetY = HOVER_HEIGHT + 5; // Fly away
+        }
+
+        function showStatus(msg, color) {
+            const el = document.getElementById('status-message');
+            el.innerText = msg;
+            el.style.color = color;
+            el.style.opacity = 1;
+            setTimeout(() => {
+                el.style.opacity = 0;
+            }, 1500);
+        }
+
+        function updateUI(actionText) {
+            document.getElementById('stack-size').innerText = stack.length;
+            const topVal = stackValues.length > 0 ? stackValues[stackValues.length - 1] : "None";
+            document.getElementById('stack-top').innerText = topVal;
+            if(actionText) document.getElementById('current-action').innerText = actionText;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            let animationActive = false;
+
+            // Logic for all stack items
+            // We iterate backwards safely if we need to remove items
+            for (let i = stack.length - 1; i >= 0; i--) {
+                const mesh = stack[i];
+                const data = mesh.userData;
+
+                if (data.state === 'dropping') {
+                    animationActive = true;
+                    
+                    // Simple gravity simulation or lerp
+                    // Let's use lerp for smooth visual
+                    if (mesh.position.y > data.targetY + 0.05) {
+                        mesh.position.y += (data.targetY - mesh.position.y) * 0.15; // Ease out
+                    } else {
+                        // Snap to grid and finish
+                        mesh.position.y = data.targetY;
+                        data.state = 'settled';
+                        
+                        // Impact bounce effect (visual squash?) - maybe too complex for basic
+                        updateUI("Idle");
+                    }
+                } 
+                else if (data.state === 'popping') {
+                    animationActive = true;
+                    
+                    // Move up
+                    mesh.position.y += 0.5; // Constant speed up
+                    mesh.rotation.y += 0.1; // Spin while leaving
+                    mesh.rotation.z += 0.05; 
+
+                    if (mesh.position.y > 20) {
+                        // Remove from scene
+                        scene.remove(mesh);
+                        mesh.geometry.dispose();
+                        mesh.material.dispose();
+                        
+                        // Remove from arrays
+                        stack.pop();
+                        stackValues.pop();
+                        
+                        updateUI("Idle");
+                        // Loop continues, but this item is gone from array so loop integrity is fine if we break or use reverse loop
+                    }
+                }
+            }
+
+            isAnimating = animationActive;
+
+            renderer.render(scene, camera);
+        }
+
+        // Start logic once DOM is ready
+        window.onload = init;
+
+    </script>
+</body>
+</html>
